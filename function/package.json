@@ -1,0 +1,25 @@
+{
+  "name": "s3-signed-urls",
+  "version": "1.0.0",
+  "description": "API Gateway access (GET/PUT) to S3 objects using signed URLs. This bypasses the API Gateway payload size limit of 10 MB.",
+  "devDependencies": {
+    "aws-sdk": "^2.202.0",
+    "eslint": "^4.18.1",
+    "eslint-config-airbnb-base": "^12.1.0",
+    "eslint-plugin-import": "^2.9.0"
+  },
+  "main": "index.js",
+  "keywords": [
+    "api",
+    "gateway",
+    "s3",
+    "objects",
+    "signed",
+    "urls",
+    "size",
+    "limit"
+  ],
+  "repository": "github:chriscoombs/s3-signed-urls",
+  "author": "Chris Coombs",
+  "license": "MIT"
+}
