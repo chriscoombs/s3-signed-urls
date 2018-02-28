@@ -13,16 +13,10 @@
                 "Runtime": "nodejs6.10",
                 "CodeUri": "s3://s3-signed-urls-asar/function.zip",
                 "Policies": [
-                    "AWSLambdaExecute",
                     {
-                        "Version": "2012-10-17",
-                        "Statement": {
-                            "Effect": "Allow",
-                            "Action": [
-                                "s3:getSignedUrl"
-                            ],
-                            "Resource": {
-                                "Fn::Sub": "${Bucket.Arn}"
+                        "S3CrudPolicy": {
+                            "BucketName": {
+                                "Ref": "Bucket"
                             }
                         }
                     }
@@ -33,22 +27,18 @@
                             "Ref": "Bucket"
                         }
                     }
-                }
-            }
-        },
-        "Permission": {
-            "Type": "AWS::Lambda::Permission",
-            "Properties": {
-                "Action": "lambda:invokeFunction",
-                "FunctionName": {
-                    "Fn::GetAtt": [
-                        "Function",
-                        "Arn"
-                    ]
                 },
-                "Principal": "apigateway.amazonaws.com",
-                "SourceArn": {
-                    "Fn::Sub": "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:*"
+                "Events": {
+                    "Api": {
+                        "Type": "Api",
+                        "Properties": {
+                            "Path": "/{proxy+}",
+                            "Method": "*",
+                            "RestApiId": {
+                                "Fn::Sub": "${RestApi}"
+                            }
+                        }
+                    }
                 }
             }
         },
