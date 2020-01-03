@@ -1,42 +1,56 @@
-const AWS = require('aws-sdk'); // eslint-disable-line import/no-extraneous-dependencies
+// Lambda@Edge does not support environment variables, hence InlineCode with !Sub
+const bucket = '${Bucket}'
+const expires = ${Duration};
+const stage = '${StageName}'
+const role = '${Assume.Arn}'
+const region = '${AWS::Region}'
 
-const s3 = new AWS.S3();
+const AWS = require('aws-sdk');
 
-const { bucket } = process.env;
-
-// the number of seconds to expire the pre-signed URL operation in, default is 900 (15 minutes)
-const expires = 900;
-const methodOperations = new Map([
-  ['GET', 'getObject'],
-  ['PUT', 'putObject'],
-]);
-
-const getSignedUrl = (method, path) => {
-  const operation = methodOperations.get(method);
-  const params = {
-    Bucket: bucket,
-    Key: path,
-    Expires: expires,
-  };
-  return s3.getSignedUrl(operation, params);
-};
-
-const handler = (event, context, callback) => {
-  const method = event.httpMethod;
-  const path = event.pathParameters.proxy;
-  if (methodOperations.get(method)) {
-    const url = getSignedUrl(method, path);
-    callback(null, {
-      statusCode: 307,
-      headers: {
-        Location: url,
-      },
+const handler = async (event, context) => {
+  let response;
+  if (
+    // If API Gateway event or
+    event.httpMethod ||
+    // CloudFront event and origin has thrown oversized error
+    (event.Records &&
+      event.Records[0].cf.response.status === '413')
+  ) {
+    const sts = new AWS.STS();
+    const data = await sts.assumeRole({
+      RoleArn: role,
+      RoleSessionName: context.awsRequestId,
+    }).promise();
+    const s3 = new AWS.S3({
+      credentials: sts.credentialsFrom(data),
+      region,
     });
+    const method = event.Records ? event.Records[0].cf.request.method : event.httpMethod;
+    const path = event.Records ? event.Records[0].cf.request.uri.replace('/' + stage, '').substr(1) : event.pathParameters.proxy;
+    const url = s3.getSignedUrl(method === 'GET' ? 'getObject' : 'putObject', {
+      Bucket: bucket,
+      Key: path,
+      Expires: expires,
+    });
+    if (event.Records) {
+      response = event.Records[0].cf.response;
+      response.status = '307';
+      response.headers.location = [{
+        key: 'Location',
+        value: url,
+      }];
+    } else {
+      response = {
+        statusCode: 307,
+        headers: {
+          Location: url,
+        },
+      };
+    }
   } else {
-    callback(null, {
-      statusCode: 405,
-    });
+    response = event.Records[0].cf.response;
   }
+  return response;
 };
 
 module.exports = {

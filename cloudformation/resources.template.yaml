@@ -1,0 +1,218 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: s3-signed-urls
+Parameters:
+  StageName:
+    Type: String
+    Default: latest
+    Description: API Gateway stage name
+  Duration:
+    Type: String
+    Default: "900"
+    Description: The number of seconds to expire the signed S3 URL in, max is 43200 (12 hours)
+Resources:
+  # Default bucket to store objects
+  Bucket:
+    Type: AWS::S3::Bucket
+  # Basic Lambda execution role
+  FunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: "/"
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: "AllowLambdaServiceToAssumeRole"
+            Effect: "Allow"
+            Action:
+              - "sts:AssumeRole"
+            Principal:
+              Service:
+                - "lambda.amazonaws.com"
+                - "edgelambda.amazonaws.com"
+  # Role for function to assume, to avoid premature signed URL expiry
+  AssumeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: "/"
+      MaxSessionDuration: 43200
+      Policies:
+        - PolicyName: getSignedUrl
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:getSignedUrl
+                Resource:
+                  - !Sub ${Bucket.Arn}
+        - PolicyName: objectOperations
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:putObject*
+                  - s3:getObject*
+                Resource:
+                  - !Sub ${Bucket.Arn}/*
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: "AllowLambdaFunctionToAssumeRole"
+            Effect: "Allow"
+            Action:
+              - "sts:AssumeRole"
+            Principal:
+              AWS:
+                - !GetAtt FunctionRole.Arn
+  # Example REST API which generates signed S3 URLs
+  RestApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: !Ref "StageName"
+      DefinitionBody:
+        swagger: "2.0"
+        info:
+          version: 1.0.0
+          title: s3-signed-urls
+        basePath: !Sub "/${StageName}"
+        schemes:
+          - https
+        paths:
+          "/{proxy+}":
+            get:
+              x-amazon-apigateway-integration:
+                uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${Function.Arn}/invocations"
+                passthroughBehavior: when_no_match
+                httpMethod: POST
+                type: aws_proxy
+            put:
+              x-amazon-apigateway-integration:
+                uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${Function.Arn}/invocations"
+                passthroughBehavior: when_no_match
+                httpMethod: POST
+                type: aws_proxy
+        definitions:
+          Empty:
+            type: object
+            title: Empty Schema
+  # Lambda function to generate signed S3 URLs
+  Function:
+    Type: AWS::Serverless::Function
+    Properties:
+      Events:
+        Get:
+          Type: Api
+          Properties:
+            Path: /{proxy+}
+            Method: GET
+            RestApiId: !Ref "RestApi"
+        Put:
+          Type: Api
+          Properties:
+            Path: /{proxy+}
+            Method: PUT
+            RestApiId: !Ref "RestApi"
+      Handler: index.handler
+      # Latest supported Node runtime for Lambda@Edge is nodejs10.x
+      Runtime: nodejs10.x
+      Role: !GetAtt FunctionRole.Arn
+      InlineCode: !Sub |
+        // Lambda@Edge does not support environment variables, hence InlineCode with !Sub
+        const bucket = '${Bucket}'
+        const expires = ${Duration};
+        const stage = '${StageName}'
+        const role = '${AssumeRole.Arn}'
+        const region = '${AWS::Region}'
+
+        const AWS = require('aws-sdk');
+
+        const handler = async (event, context) => {
+          let response;
+          if (
+            // If API Gateway event or
+            event.httpMethod ||
+            // CloudFront event and origin has thrown oversized error
+            (event.Records &&
+              event.Records[0].cf.response.status === '413')
+          ) {
+            const sts = new AWS.STS();
+            const data = await sts.assumeRole({
+              RoleArn: role,
+              RoleSessionName: context.awsRequestId,
+            }).promise();
+            const s3 = new AWS.S3({
+              credentials: sts.credentialsFrom(data),
+              region,
+            });
+            const method = event.Records ? event.Records[0].cf.request.method : event.httpMethod;
+            const path = event.Records ? event.Records[0].cf.request.uri.replace('/' + stage, '').substr(1) : event.pathParameters.proxy;
+            const url = s3.getSignedUrl(method === 'GET' ? 'getObject' : 'putObject', {
+              Bucket: bucket,
+              Key: path,
+              Expires: expires,
+            });
+            if (event.Records) {
+              response = event.Records[0].cf.response;
+              response.status = '307';
+              response.headers.location = [{
+                key: 'Location',
+                value: url,
+              }];
+            } else {
+              response = {
+                statusCode: 307,
+                headers: {
+                  Location: url,
+                },
+              };
+            }
+          } else {
+            response = event.Records[0].cf.response;
+          }
+          return response;
+        };
+
+        module.exports = {
+          handler,
+        };
+  # Lambda version, required for CloudFront association
+  Version:
+    Type: AWS::Lambda::Version
+    Properties:
+      FunctionName: !Sub "${Function.Arn}"
+  # CloudFront distribution (with Lambda@Edge) to handle oversize files
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Origins:
+          - DomainName: !Sub "${RestApi}.execute-api.${AWS::Region}.amazonaws.com"
+            Id: API
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+        DefaultCacheBehavior:
+          ForwardedValues:
+            QueryString: false
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+            - PUT
+            - POST
+            - PATCH
+            - DELETE
+          LambdaFunctionAssociations:
+            - EventType: origin-response
+              LambdaFunctionARN: !Ref "Version"
+          DefaultTTL: 0
+          TargetOriginId: API
+          ViewerProtocolPolicy: redirect-to-https
+        HttpVersion: http2
+        ViewerCertificate:
+          MinimumProtocolVersion: TLSv1.2_2018
+          CloudFrontDefaultCertificate: true
