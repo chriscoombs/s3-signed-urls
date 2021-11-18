@@ -1,9 +1,9 @@
 // Lambda@Edge does not support environment variables, hence InlineCode with !Sub
-const bucket = '${Bucket}'
+const bucket = '${Bucket}';
 const expires = ${Duration};
-const stage = '${StageName}'
-const role = '${Assume.Arn}'
-const region = '${AWS::Region}'
+const stage = '${StageName}';
+const role = '${AssumeRole.Arn}';
+const region = '${AWS::Region}';
 
 const AWS = require('aws-sdk');
 
@@ -11,10 +11,10 @@ const handler = async (event, context) => {
   let response;
   if (
     // If API Gateway event or
-    event.httpMethod ||
+    event.httpMethod
     // CloudFront event and origin has thrown oversized error
-    (event.Records &&
-      event.Records[0].cf.response.status === '413')
+    || (event.Records
+      && event.Records[0].cf.response.status === '413')
   ) {
     const sts = new AWS.STS();
     const data = await sts.assumeRole({
