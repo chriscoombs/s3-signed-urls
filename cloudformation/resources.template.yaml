@@ -117,8 +117,7 @@ Resources:
             Method: PUT
             RestApiId: !Ref "RestApi"
       Handler: index.handler
-      # Latest supported Node runtime for Lambda@Edge is nodejs10.x
-      Runtime: nodejs10.x
+      Runtime: nodejs14.x
       Role: !GetAtt FunctionRole.Arn
       InlineCode: !Sub |
         // Lambda@Edge does not support environment variables, hence InlineCode with !Sub
