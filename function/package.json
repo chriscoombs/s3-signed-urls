@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "API Gateway access (GET/PUT) to S3 objects using signed URLs. This bypasses the API Gateway payload size limit of 10 MB.",
   "devDependencies": {
-    "aws-sdk": "^2.597.0",
+    "aws-sdk": "^2.814.0",
     "eslint": "^4.19.1",
     "eslint-config-airbnb-base": "^12.1.0",
     "eslint-plugin-import": "^2.19.1"
